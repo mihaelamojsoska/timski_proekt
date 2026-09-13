@@ -2517,7 +2517,7 @@ textarea:focus-visible {
   display: none;
   position: fixed;
   top: 12px;
-  right: 12px;
+  left: 12px;
   z-index: 60;
   height: 40px;
   width: 40px;
@@ -2565,10 +2565,10 @@ textarea:focus-visible {
     right: auto;
   }
   .sidebar-left.mobile-open .brand {
-    padding-left: 44px;
+    padding-left: 56px;
   }
   .masthead {
-    padding: 12px 64px 12px 20px;
+    padding: 12px 20px 12px 64px;
   }
   .composer {
     padding: 16px 20px;
