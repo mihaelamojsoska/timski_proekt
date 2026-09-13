@@ -520,12 +520,14 @@ main {
 .masthead {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   border-bottom: 1px solid var(--border);
   padding: 12px 40px;
 }
 .masthead-l {
+  align-self: stretch;
   display: flex;
   align-items: baseline;
   gap: 12px;
@@ -546,6 +548,8 @@ main {
   background: var(--border);
 }
 .conv-title {
+  margin-left: auto;
+  padding-right: 8px;
   font-family: 'Instrument Serif', serif;
   font-style: italic;
   font-size: 26px;
@@ -555,7 +559,7 @@ main {
   text-overflow: ellipsis;
 }
 .masthead-r {
-  margin-left: auto;
+  align-self: stretch;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -790,6 +794,15 @@ select {
 }
 .sugg:hover {
   border-color: var(--ink);
+}
+/* Vertical list of .sugg cards rendered one after another (Admin approval
+   queue, My courses) - without this they stack with their borders touching,
+   since .sugg itself has no margin. Same shape as .progress-list below. */
+.card-stack {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .sugg-num {
   font-family: 'JetBrains Mono', monospace;
@@ -1723,7 +1736,10 @@ select {
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--ink-soft);
-  min-height: 68px;
+  /* Reserves enough room for the longest slide's body text (the "dossier"
+     slide) so the modal doesn't visibly grow/shrink as you click through
+     shorter and longer slides - 68px only covered the shortest ones. */
+  min-height: 120px;
 }
 .tour-body kbd {
   font-family: 'JetBrains Mono', monospace;

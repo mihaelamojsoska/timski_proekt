@@ -125,7 +125,8 @@ export function AdminPage() {
             <div className="empty" style={{ marginTop: 24 }}>Nothing here right now.</div>
           )}
 
-          {(courses || []).map((c) => (
+          <div className="card-stack">
+            {(courses || []).map((c) => (
             <div
               key={c.id}
               className="sugg"
@@ -210,7 +211,8 @@ export function AdminPage() {
                 </button>
               </div>
             </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </AppShell>
