@@ -2704,3 +2704,8 @@ textarea:focus-visible {
     color: var(--ink);
   }
 }
+@media (max-width: 1024px) {
+  .sidebar-right .dossier-head {
+    padding-left: 52px;
+  }
+}
