@@ -2478,7 +2478,18 @@ textarea:focus-visible {
     max-width: 1500px;
   }
 }
-
+.sidebar-right-backdrop {
+  display: none;
+}
+@media (max-width: 1024px) {
+  .sidebar-right-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 54;
+  }
+}
 @media (max-width: 1024px) {
   .sidebar-right {
     position: fixed;
