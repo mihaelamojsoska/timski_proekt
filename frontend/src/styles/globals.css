@@ -2565,6 +2565,7 @@ textarea:focus-visible {
     top: 12px;
     left: 12px;
     right: auto;
+    transform: none;
     height: 40px;
     width: 40px;
     border-radius: 8px;
