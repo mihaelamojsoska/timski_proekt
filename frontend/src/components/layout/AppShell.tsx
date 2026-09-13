@@ -85,32 +85,44 @@ export function AppShell({
     };
   }, [mobileOpen, rightSidebar, rightSidebarCollapsed, onRightSidebarToggle]);
 
+  // On the mobile overlay, always show the full sidebar regardless of the
+  // persisted desktop icon-only preference - a narrow icon rail floating in
+  // an otherwise-empty 80vw panel makes no sense once it's already an
+  // overlay rather than competing for space with the main content.
   const sidebarContent = isValidElement(sidebar)
-    ? cloneElement(sidebar as ReactElement<{ collapsed?: boolean }>, { collapsed: leftCollapsed })
+    ? cloneElement(sidebar as ReactElement<{ collapsed?: boolean }>, {
+        collapsed: mobileOpen ? false : leftCollapsed,
+      })
     : sidebar;
 
   return (
     <div className="app paper-grain">
-      <button
-        type="button"
-        className="mobile-nav-toggle"
-        onClick={() => setMobileOpen((v) => !v)}
-        aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-        title={mobileOpen ? 'Close menu' : 'Open menu'}
-      >
-        <ChevronIcon flip={mobileOpen} />
-      </button>
+      {/* Only shown while the mobile sidebar is CLOSED - once open, the
+         sidebar's own inline arrow below (styled like desktop's, next to
+         the "LearnWise" brand) takes over as the close control, sitting
+         inline instead of floating over page content. */}
+      {!mobileOpen && (
+        <button
+          type="button"
+          className="mobile-nav-toggle"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+          title="Open menu"
+        >
+          <ChevronIcon />
+        </button>
+      )}
       {mobileOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileOpen(false)} />}
       <aside className={`sidebar-left${leftCollapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
         {sidebarContent}
         <button
           type="button"
           className="sidebar-collapse-btn"
-          onClick={toggleLeft}
-          aria-label={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          onClick={mobileOpen ? () => setMobileOpen(false) : toggleLeft}
+          aria-label={mobileOpen ? 'Close menu' : leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={mobileOpen ? 'Close menu' : leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          <ChevronIcon flip={leftCollapsed} />
+          <ChevronIcon flip={mobileOpen ? false : leftCollapsed} />
         </button>
       </aside>
       <main>{children}</main>
