@@ -2561,8 +2561,14 @@ textarea:focus-visible {
     max-width: 300px;
   }
   .sidebar-left.mobile-open .sidebar-collapse-btn {
-    left: 8px;
+    top: 12px;
+    left: 12px;
     right: auto;
+    height: 40px;
+    width: 40px;
+    border-radius: 8px;
+    background: var(--paper);
+    border: 1px solid var(--border);
   }
   .sidebar-left.mobile-open .brand {
     padding-left: 56px;
