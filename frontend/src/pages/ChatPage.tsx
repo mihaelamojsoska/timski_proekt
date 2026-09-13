@@ -404,6 +404,7 @@ export function ChatPage() {
         />
       }
       rightSidebarCollapsed={sourcesCollapsed}
+      onRightSidebarToggle={toggleSources}
       rightSidebar={
         <SourcesSidebar
           sources={sources}
