@@ -2481,7 +2481,17 @@ textarea:focus-visible {
 
 @media (max-width: 1024px) {
   .sidebar-right {
-    display: none;
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 55;
+    width: 85vw;
+    max-width: 340px;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
+  }
+  .sidebar-right:not(.collapsed) {
+    transform: translateX(0);
   }
 }
 @media (max-width: 640px) {
@@ -2529,6 +2539,7 @@ textarea:focus-visible {
     transform: translateX(-100%);
     transition: transform 0.2s ease;
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
+    background: var(--paper);
   }
   .sidebar-left.mobile-open {
     transform: translateX(0);
