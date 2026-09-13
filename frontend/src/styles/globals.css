@@ -2489,6 +2489,7 @@ textarea:focus-visible {
     transform: translateX(100%);
     transition: transform 0.2s ease;
     box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
+    background: var(--paper);
   }
   .sidebar-right:not(.collapsed) {
     transform: translateX(0);
