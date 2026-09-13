@@ -2556,6 +2556,9 @@ textarea:focus-visible {
   .sidebar-left.mobile-open {
     transform: translateX(0);
   }
+  .sidebar-left.mobile-open .brand {
+    padding-left: 64px;
+  }
   .sidebar-left.collapsed.mobile-open {
     width: 80vw;
     max-width: 300px;
