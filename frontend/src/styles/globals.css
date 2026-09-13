@@ -2564,7 +2564,7 @@ textarea:focus-visible {
     display: none;
   }
   .masthead {
-    padding: 12px 20px;
+    padding: 12px 20px 12px 64px;
   }
   .composer {
     padding: 16px 20px;
