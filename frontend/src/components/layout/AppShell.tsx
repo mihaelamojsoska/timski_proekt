@@ -84,7 +84,20 @@ export function AppShell({
       )}
       {rightSidebar && (
         <aside className={`sidebar-right${rightSidebarCollapsed ? ' collapsed' : ''}`}>
-          {!rightSidebarCollapsed && rightSidebar}
+          {!rightSidebarCollapsed && (
+            <>
+              <button
+                type="button"
+                className="sidebar-right-close-btn"
+                onClick={onRightSidebarToggle}
+                aria-label="Close sources panel"
+                title="Close sources panel"
+              >
+                <ChevronIcon flip />
+              </button>
+              {rightSidebar}
+            </>
+          )}
         </aside>
       )}
     </div>
