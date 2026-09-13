@@ -109,7 +109,7 @@ export function AppShell({
           aria-label="Open menu"
           title="Open menu"
         >
-          <ChevronIcon />
+          <ChevronIcon flip />
         </button>
       )}
       {mobileOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileOpen(false)} />}
