@@ -2682,3 +2682,25 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+.sidebar-right-close-btn {
+  display: none;
+}
+@media (max-width: 1024px) {
+  .sidebar-right-close-btn {
+    display: grid;
+    place-items: center;
+    position: absolute;
+    top: 16px;
+    left: 12px;
+    height: 28px;
+    width: 28px;
+    border-radius: 6px;
+    color: var(--muted);
+    background: var(--cream);
+    border: 1px solid var(--border);
+    z-index: 56;
+  }
+  .sidebar-right-close-btn:hover {
+    color: var(--ink);
+  }
+}
