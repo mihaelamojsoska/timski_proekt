@@ -86,7 +86,9 @@ export function AppShell({
   }, [mobileOpen, rightSidebar, rightSidebarCollapsed, onRightSidebarToggle]);
 
   const sidebarContent = isValidElement(sidebar)
-    ? cloneElement(sidebar as ReactElement<{ collapsed?: boolean }>, { collapsed: leftCollapsed })
+    ? cloneElement(sidebar as ReactElement<{ collapsed?: boolean }>, {
+        collapsed: mobileOpen ? false : leftCollapsed,
+      })
     : sidebar;
 
   return (
