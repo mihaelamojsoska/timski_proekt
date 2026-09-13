@@ -2563,9 +2563,6 @@ textarea:focus-visible {
     width: 80vw;
     max-width: 300px;
   }
-  .sidebar-left .sidebar-collapse-btn {
-    display: none;
-  }
   .masthead {
     padding: 12px 20px 12px 64px;
   }
