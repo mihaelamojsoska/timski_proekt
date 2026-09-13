@@ -31,9 +31,19 @@ interface AppShellProps {
    * since its toggle button lives wherever makes sense for that page (e.g.
    * ChatPage's own masthead), not inside this generic shell. */
   rightSidebarCollapsed?: boolean;
+  /** Same caller-owned toggle as above - passed through so the backdrop
+   * (shown only on narrow screens, see globals.css) can close the panel
+   * on tap, matching the left sidebar's mobile behavior. */
+  onRightSidebarToggle?: () => void;
 }
 
-export function AppShell({ sidebar, children, rightSidebar, rightSidebarCollapsed }: AppShellProps) {
+export function AppShell({
+  sidebar,
+  children,
+  rightSidebar,
+  rightSidebarCollapsed,
+  onRightSidebarToggle,
+}: AppShellProps) {
   const [leftCollapsed, toggleLeft] = useCollapsed('lw_sidebar_left');
   // Separate from leftCollapsed (which persists the desktop icon-only
   // preference) - this only controls whether the sidebar overlay is open
@@ -69,6 +79,9 @@ export function AppShell({ sidebar, children, rightSidebar, rightSidebarCollapse
         </button>
       </aside>
       <main>{children}</main>
+      {rightSidebar && !rightSidebarCollapsed && (
+        <div className="sidebar-right-backdrop" onClick={onRightSidebarToggle} />
+      )}
       {rightSidebar && (
         <aside className={`sidebar-right${rightSidebarCollapsed ? ' collapsed' : ''}`}>
           {!rightSidebarCollapsed && rightSidebar}
