@@ -2516,7 +2516,7 @@ textarea:focus-visible {
 .mobile-nav-toggle {
   display: none;
   position: fixed;
-  top: 12px;
+  top: 6px;
   left: 12px;
   z-index: 60;
   height: 40px;
@@ -2562,7 +2562,7 @@ textarea:focus-visible {
   }
   .sidebar-left.mobile-open .sidebar-collapse-btn {
     position: absolute;
-    top: 12px;
+    top: 6px;
     left: 12px;
     right: auto;
     transform: none;
