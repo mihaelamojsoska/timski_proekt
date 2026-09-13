@@ -520,14 +520,12 @@ main {
 .masthead {
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 16px;
   border-bottom: 1px solid var(--border);
   padding: 12px 40px;
 }
 .masthead-l {
-  align-self: stretch;
   display: flex;
   align-items: baseline;
   gap: 12px;
@@ -548,8 +546,6 @@ main {
   background: var(--border);
 }
 .conv-title {
-  margin-left: auto;
-  padding-right: 8px;
   font-family: 'Instrument Serif', serif;
   font-style: italic;
   font-size: 26px;
@@ -559,7 +555,7 @@ main {
   text-overflow: ellipsis;
 }
 .masthead-r {
-  align-self: stretch;
+  margin-left: auto;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -795,15 +791,6 @@ select {
 .sugg:hover {
   border-color: var(--ink);
 }
-/* Vertical list of .sugg cards rendered one after another (Admin approval
-   queue, My courses) - without this they stack with their borders touching,
-   since .sugg itself has no margin. Same shape as .progress-list below. */
-.card-stack {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 .sugg-num {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
@@ -924,33 +911,26 @@ select {
   font-size: 15px;
   line-height: 1.75;
 }
-.msg-ai-body p,
-.msg-ai-reasoning-text p {
+.msg-ai-body p {
   margin: 0;
 }
-.msg-ai-body p + p,
-.msg-ai-reasoning-text p + p {
+.msg-ai-body p + p {
   margin-top: 12px;
 }
 .msg-ai-body ul,
-.msg-ai-body ol,
-.msg-ai-reasoning-text ul,
-.msg-ai-reasoning-text ol {
+.msg-ai-body ol {
   margin: 12px 0 0;
   padding-left: 18px;
 }
-.msg-ai-body ul,
-.msg-ai-reasoning-text ul {
+.msg-ai-body ul {
   list-style: none;
 }
-.msg-ai-body ul li,
-.msg-ai-reasoning-text ul li {
+.msg-ai-body ul li {
   position: relative;
   padding-left: 14px;
   margin-bottom: 6px;
 }
-.msg-ai-body ul li::before,
-.msg-ai-reasoning-text ul li::before {
+.msg-ai-body ul li::before {
   content: '';
   position: absolute;
   left: 0;
@@ -960,32 +940,27 @@ select {
   background: var(--ink);
   border-radius: 50%;
 }
-.msg-ai-body strong,
-.msg-ai-reasoning-text strong {
+.msg-ai-body strong {
   font-weight: 600;
 }
 /* Markdown tables - previously entirely unstyled (bare browser-default
    table rendering), for content like comparisons that the AI is now
    instructed to lay out as a real table instead of faking columns with
    plain text. */
-.msg-ai-body table,
-.msg-ai-reasoning-text table {
+.msg-ai-body table {
   width: 100%;
   margin: 16px 0;
   border-collapse: collapse;
   font-size: 13.5px;
 }
 .msg-ai-body th,
-.msg-ai-body td,
-.msg-ai-reasoning-text th,
-.msg-ai-reasoning-text td {
+.msg-ai-body td {
   padding: 8px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
-.msg-ai-body th,
-.msg-ai-reasoning-text th {
+.msg-ai-body th {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10.5px;
   font-weight: 600;
@@ -995,13 +970,10 @@ select {
   border-bottom: 1px solid var(--ink);
 }
 .msg-ai-body tbody tr:last-child th,
-.msg-ai-body tbody tr:last-child td,
-.msg-ai-reasoning-text tbody tr:last-child th,
-.msg-ai-reasoning-text tbody tr:last-child td {
+.msg-ai-body tbody tr:last-child td {
   border-bottom: none;
 }
-.msg-ai-body code,
-.msg-ai-reasoning-text code {
+.msg-ai-body code {
   border: 1px solid var(--border);
   background: var(--cream);
   padding: 1px 5px;
@@ -1037,8 +1009,7 @@ select {
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.35);
 }
-.msg-ai-body pre,
-.msg-ai-reasoning-text pre {
+.msg-ai-body pre {
   background: none;
   color: var(--code-text);
   padding: 12px 14px;
@@ -1051,8 +1022,7 @@ select {
   font-size: 12.5px;
   line-height: 1.5;
 }
-.msg-ai-body pre code,
-.msg-ai-reasoning-text pre code {
+.msg-ai-body pre code {
   background: none;
   border: none;
   color: inherit;
@@ -1117,140 +1087,6 @@ select {
   background: rgba(var(--destructive-rgb), 0.06);
   padding: 10px 12px;
   border-radius: 6px;
-}
-/* "Show my reasoning" - the two isolated single-source drafts behind a
-   cross-checked answer (see answer_verification.py), collapsed by default
-   since most students only care about the final merged answer above. */
-/* "Thought for Xs" - a persisted, click-to-expand disclosure sitting above
-   the answer (Claude's placement/pattern), not a status line that flashes
-   by mid-stream and disappears once the answer starts. Expands to the
-   ordered process steps, plus (when the pipeline actually cross-checked two
-   sources) the two draft cards below them. */
-.msg-ai-thinking-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  font-family: 'Work Sans', system-ui, sans-serif;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--ink-soft);
-  background: var(--cream);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.msg-ai-thinking-toggle:hover {
-  color: var(--ink);
-  background: var(--border);
-}
-.msg-ai-thinking-toggle svg {
-  width: 11px;
-  height: 11px;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-.msg-ai-thinking-toggle svg:first-child {
-  color: var(--muted);
-}
-.msg-ai-thinking-body {
-  margin-top: 12px;
-  padding: 12px 14px;
-  background: var(--cream);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.msg-ai-thinking-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  list-style: none;
-  font-size: 13px;
-  color: var(--ink-soft);
-}
-.msg-ai-thinking-steps li {
-  position: relative;
-  padding-left: 16px;
-}
-.msg-ai-thinking-steps li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 7px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--emerald);
-}
-/* The actual "reasoning between the two models", not just the two raw
-   drafts with no comparison drawn between them - what each uniquely
-   covers, where they agree/conflict. Sits between the process steps and
-   the raw draft cards, visually called out since it's the part most worth
-   reading. */
-.msg-ai-comparison-notes {
-  margin-top: 14px;
-  padding: 12px 14px;
-  background: var(--paper);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--emerald);
-  border-radius: 6px;
-}
-.msg-ai-thinking-body .msg-ai-reasoning-body {
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-.msg-ai-reasoning-body {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 14px;
-}
-.msg-ai-reasoning-draft {
-  background: var(--cream);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
-}
-.msg-ai-reasoning-draft-wide {
-  grid-column: 1 / -1;
-}
-.msg-ai-reasoning-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-.msg-ai-reasoning-sublabel {
-  font-family: 'Work Sans', system-ui, sans-serif;
-  font-weight: 400;
-  font-style: italic;
-  text-transform: none;
-  letter-spacing: normal;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.msg-ai-reasoning-label svg {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-}
-.msg-ai-reasoning-text {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-}
-@media (max-width: 640px) {
-  .msg-ai-reasoning-body {
-    grid-template-columns: 1fr;
-  }
 }
 .composer {
   flex-shrink: 0;
@@ -1435,27 +1271,6 @@ select {
   font-size: 11px;
   font-style: italic;
   color: var(--muted);
-}
-.src-cache-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 8px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(var(--card-rgb), 0.6);
-  color: var(--muted);
-  font-size: 10.5px;
-  font-style: italic;
-  width: fit-content;
-}
-.src-cache-pill svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .empty {
   margin-top: 12px;
@@ -1736,10 +1551,7 @@ select {
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--ink-soft);
-  /* Reserves enough room for the longest slide's body text (the "dossier"
-     slide) so the modal doesn't visibly grow/shrink as you click through
-     shorter and longer slides - 68px only covered the shortest ones. */
-  min-height: 120px;
+  min-height: 68px;
 }
 .tour-body kbd {
   font-family: 'JetBrains Mono', monospace;
