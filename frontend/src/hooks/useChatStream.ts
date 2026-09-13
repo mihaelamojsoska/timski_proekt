@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { getToken, setToken } from '../api/tokenStore';
-import type { ChatMessage, ChatSource } from '../types/chat';
+import type { ChatMessage, ChatSource, ReasoningComparison } from '../types/chat';
 
 export interface DisplayMessage {
   id: string;
@@ -14,6 +14,22 @@ export interface DisplayMessage {
    * for the viewer's own messages (shown as "You", the existing behavior) and
    * for every message in a solo conversation. */
   authorName?: string;
+  /** Only present when the answer was cross-checked against both a live
+   * search draft and a course-context draft (see answer_verification.py) -
+   * renders as a "show my reasoning" toggle on this message. */
+  reasoning?: ReasoningComparison;
+  /** Ordered log of live status updates from the dual-draft+verify pipeline
+   * (see answer_verification.py) - accumulated (via onThinking), not
+   * replaced, so the full "thinking process" trace survives after streaming
+   * ends and can be expanded afterward (like Claude's "Thought for Xs"
+   * disclosure), not just flashed by live and lost. */
+  thinkingSteps?: string[];
+  /** Set once streaming finishes, only when thinkingSteps is non-empty -
+   * total wall-clock time the pipeline took, for the "Thought for Xs" label. */
+  thinkingDurationMs?: number;
+  /** Internal bookkeeping - when this message's request started, so
+   * thinkingDurationMs can be computed on completion. Never rendered. */
+  thinkingStartedAt?: number;
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -21,6 +37,9 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 interface StreamCallbacks {
   onConversationInfo?: (info: { id: number; title: string; issue_no: number }) => void;
   onSources?: (sources: ChatSource[]) => void;
+  onSearchMeta?: (meta: { fromCache: boolean }) => void;
+  onReasoning?: (data: ReasoningComparison) => void;
+  onThinking?: (status: string) => void;
   onSessionExpired?: () => void;
   onError?: (message: string) => void;
   onDone?: () => void;
@@ -88,7 +107,10 @@ export function useChatStream() {
         const decoder = new TextDecoder();
         let buffer = '';
         let expectSources = false;
+        let expectSearchMeta = false;
         let expectConversation = false;
+        let expectReasoning = false;
+        let expectThinking = false;
         let expectError = false;
         let doneReceived = false;
 
@@ -107,6 +129,18 @@ export function useChatStream() {
             }
             if (line === 'event: sources') {
               expectSources = true;
+              continue;
+            }
+            if (line === 'event: searchMeta') {
+              expectSearchMeta = true;
+              continue;
+            }
+            if (line === 'event: reasoning') {
+              expectReasoning = true;
+              continue;
+            }
+            if (line === 'event: thinking') {
+              expectThinking = true;
               continue;
             }
             if (line === 'event: error') {
@@ -136,11 +170,50 @@ export function useChatStream() {
                   const sources = JSON.parse(data);
                   if (Array.isArray(sources)) {
                     callbacks.onSources?.(sources);
-                    continue;
                   }
                 } catch {
                   /* ignore malformed frame */
                 }
+                continue;
+              }
+
+              if (expectSearchMeta) {
+                expectSearchMeta = false;
+                try {
+                  const meta = JSON.parse(data);
+                  if (typeof meta?.fromCache === 'boolean') {
+                    callbacks.onSearchMeta?.(meta);
+                  }
+                } catch {
+                  /* ignore malformed frame */
+                }
+                continue;
+              }
+
+              if (expectReasoning) {
+                expectReasoning = false;
+                try {
+                  const reasoning = JSON.parse(data);
+                  if (reasoning?.searchDraft && reasoning?.courseDraft) {
+                    callbacks.onReasoning?.(reasoning);
+                  }
+                } catch {
+                  /* ignore malformed frame */
+                }
+                continue;
+              }
+
+              if (expectThinking) {
+                expectThinking = false;
+                try {
+                  const payload = JSON.parse(data);
+                  if (payload?.status) {
+                    callbacks.onThinking?.(payload.status);
+                  }
+                } catch {
+                  /* ignore malformed frame */
+                }
+                continue;
               }
 
               if (expectError) {

@@ -21,9 +21,10 @@ from backend.services.chat_service import (
     save_assistant_reply,
     save_user_message,
 )
+from backend.services import answer_verification
 from backend.services.chat_state import start_generating, stop_generating
 from backend.services.course_context import format_course_context
-from backend.services.search_cache import get_or_search, get_or_search_many
+from backend.services.search_cache import find_related_cached_search, get_or_search, get_or_search_many
 from backend.web_search.search import format_search_context
 from config import GROQ_API_KEY, TAVILY_API_KEY
 from fastapi.responses import StreamingResponse
@@ -33,14 +34,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_course(db: Session, course_id: Optional[int]) -> Optional[Course]:
+    """Look up a course by id, or None for a missing/invalid course_id."""
+    if not course_id:
+        return None
+    return db.query(Course).filter(Course.id == course_id).first()
+
+
 def _get_course_context(db: Session, course_id: Optional[int]) -> str:
     """Look up a course by id (if given) and format it into a context block.
     Silently returns "" for a missing/invalid course_id - course context is
     optional enrichment, not something that should ever 400/404 the request."""
-    if not course_id:
-        return ""
-    course = db.query(Course).filter(Course.id == course_id).first()
-    return format_course_context(course)
+    return format_course_context(_get_course(db, course_id))
 
 @router.post("/api/chat")
 async def chat(
@@ -88,14 +93,32 @@ async def chat(
     # Web search for context - served from the cache when a similar question was
     # already searched before, otherwise a live Tavily call (see services/search_cache.py)
     search_results = []
+    search_from_cache = False
     if request.search and TAVILY_API_KEY and latest_user_msg:
-        search_results, _ = await get_or_search(db, latest_user_msg, request.subject)
+        search_results, search_from_cache = await get_or_search(db, latest_user_msg, request.subject)
 
     # Compose the search-cache context with the optional course-syllabus context
     # (see backend/services/course_context.py) - both are plain context blocks,
     # concatenated the same way format_search_context's own sections are.
-    course_context = _get_course_context(db, request.course_id)
+    course = _get_course(db, request.course_id)
+    course_context = format_course_context(course)
     context = "\n\n".join(c for c in (format_search_context(search_results), course_context) if c)
+
+    # Gated on both sources genuinely being available for THIS question - see
+    # services/answer_verification.py. Decided here (course still attached to
+    # the open db session) rather than inside event_stream(), since that
+    # generator runs after the session closes below.
+    use_verification = answer_verification.should_verify(search_results, course, context, model_messages)
+
+    # Optional third source for the verification pipeline: a previously
+    # cached search loosely related to this question, found cheaply (no live
+    # search call - see find_related_cached_search's docstring). Only worth
+    # checking when this turn's own search already went live (search_from_cache
+    # False) - otherwise that same cache entry already IS search_results
+    # above, so there'd be nothing new to add.
+    related_cached = None
+    if use_verification and not search_from_cache and latest_user_msg:
+        related_cached = find_related_cached_search(db, latest_user_msg, request.subject)
 
     async def event_stream():
         # First let the UI know which conversation this belongs to (important
@@ -103,12 +126,17 @@ async def chat(
         conv_payload = json.dumps({"id": conv_id, "title": conv_title, "issue_no": conv_issue_no})
         yield f"event: conversation\ndata: {conv_payload}\n\n"
 
-        # Then emit the search sources so the UI can show them
+        # Then emit the search sources so the UI can show them, plus whether
+        # they came from the search cache (see services/search_cache.py) or a
+        # fresh live Tavily call - a separate event rather than folding into
+        # the sources payload above so the existing plain-array shape (and
+        # everything already parsing it) doesn't need to change.
         if search_results:
             sources_payload = json.dumps([
                 {"title": r.title, "url": r.url} for r in search_results
             ])
             yield f"event: sources\ndata: {sources_payload}\n\n"
+            yield f"event: searchMeta\ndata: {json.dumps({'fromCache': search_from_cache})}\n\n"
 
         # Then stream the AI response, accumulating the full text so we can save it.
         # This whole block is wrapped in try/except: by the time we're here, the
@@ -121,13 +149,41 @@ async def chat(
         full_response = ""
         start_generating(conv_id)  # advisory only - lets other members' polling show "generating"
         try:
-            async for chunk in stream_groq_response(model_messages, context, request.subject):
+            if use_verification:
+                # Two drafts + a verify call take noticeably longer than the
+                # single-call path below - these fill the "Generating..."
+                # placeholder with what's actually happening instead of a
+                # generic spinner sitting still for 2-3x as long. Timed at
+                # the two real await boundaries below, not on a fake clock:
+                # the first shows while both drafts are being generated
+                # concurrently, the second right as the verify call starts.
+                yield f"event: thinking\ndata: {json.dumps({'status': 'Checking web search results and course materials…'})}\n\n"
+                chunk_stream, reasoning = await answer_verification.build_verified_answer(
+                    model_messages, request.subject, search_results, course, related_cached
+                )
+                if reasoning:
+                    yield f"event: reasoning\ndata: {json.dumps(reasoning)}\n\n"
+                    yield f"event: thinking\ndata: {json.dumps({'status': 'Cross-checking both sources…'})}\n\n"
+            else:
+                chunk_stream = stream_groq_response(model_messages, context, request.subject)
+
+            async for chunk in chunk_stream:
                 full_response += chunk
                 yield f"data: {json.dumps(chunk)}\n\n"
         except Exception as exc:
             logger.exception("Groq streaming failed for conversation %s", conv_id)
+            detail_text = str(exc.detail) if isinstance(exc, HTTPException) else ""
+            # Groq returns 429 for "too many requests", but also uses 413
+            # ("request too large") for hitting its per-minute TOKEN budget
+            # (see its "rate_limit_exceeded" error code) - both are the same
+            # user-facing situation (wait a bit, try again), so both get the
+            # same message instead of 413 falling through to the generic one.
             if isinstance(exc, HTTPException) and exc.status_code == 429:
                 message = "You're sending messages too fast - please wait a moment and try again."
+            elif isinstance(exc, HTTPException) and (
+                exc.status_code == 413 or "rate_limit" in detail_text.lower()
+            ):
+                message = "The AI tutor is at its usage limit for the moment - please wait about a minute and try again."
             else:
                 message = "The AI tutor had trouble responding. Please try again."
             yield f"event: error\ndata: {json.dumps({'message': message})}\n\n"

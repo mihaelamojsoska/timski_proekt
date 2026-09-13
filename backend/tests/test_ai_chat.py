@@ -186,6 +186,73 @@ async def test_generate_followups_returns_empty_list_on_malformed_json(monkeypat
     assert questions == []
 
 
+# ---------------------------------------------------------------------------
+# _fit_to_token_budget - the plain path's own last-resort size safety net,
+# independent of services/answer_verification.py's gate (which only ever
+# protected the multi-call verification pipeline, never this path - see this
+# function's own docstring).
+# ---------------------------------------------------------------------------
+
+def test_fit_to_token_budget_is_a_noop_under_budget():
+    messages = [Message(role="user", content="a short question")]
+    trimmed_messages, trimmed_context = ai_chat._fit_to_token_budget(messages, "a short context block")
+    assert trimmed_messages == messages
+    assert trimmed_context == "a short context block"
+
+
+def test_fit_to_token_budget_truncates_oversized_context_before_touching_history():
+    messages = [Message(role="user", content="a short question")]
+    huge_context = "x" * (ai_chat._MAX_PLAIN_CALL_CONTEXT_CHARS + 5000)
+    trimmed_messages, trimmed_context = ai_chat._fit_to_token_budget(messages, huge_context)
+    assert trimmed_messages == messages  # history untouched - context alone was the problem
+    assert len(trimmed_context) < len(huge_context)
+    assert "truncated" in trimmed_context
+
+
+def test_fit_to_token_budget_drops_oldest_history_when_context_alone_cant_fix_it():
+    # No context at all - the oversized history itself must be trimmed.
+    messages = [
+        Message(role="user", content="x" * (ai_chat._MAX_PLAIN_CALL_CONTEXT_CHARS // 2)),
+        Message(role="assistant", content="y" * (ai_chat._MAX_PLAIN_CALL_CONTEXT_CHARS // 2)),
+        Message(role="user", content="the latest question"),
+    ]
+    trimmed_messages, trimmed_context = ai_chat._fit_to_token_budget(messages, "")
+    assert trimmed_context == ""
+    # The oldest message(s) were dropped, but the latest is always kept.
+    assert trimmed_messages[-1].content == "the latest question"
+    assert len(trimmed_messages) < len(messages)
+
+
+def test_fit_to_token_budget_always_keeps_at_least_the_latest_message():
+    # Even a single message larger than the whole budget must survive -
+    # there has to be something to send the model, however oversized.
+    messages = [Message(role="user", content="x" * (ai_chat._MAX_PLAIN_CALL_CONTEXT_CHARS * 3))]
+    trimmed_messages, _ = ai_chat._fit_to_token_budget(messages, "")
+    assert len(trimmed_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_groq_response_applies_the_budget_fit_before_sending(monkeypatch):
+    captured = {}
+    sse_lines = ["data: [DONE]"]
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        captured["json"] = json
+        return _FakeStreamCM(_FakeResponse(200, lines=sse_lines))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    huge_context = "x" * (ai_chat._MAX_PLAIN_CALL_CONTEXT_CHARS + 5000)
+    async for _ in ai_chat.stream_groq_response(
+        [Message(role="user", content="hi")], context=huge_context, subject=None
+    ):
+        pass
+
+    system_message = captured["json"]["messages"][0]["content"]
+    assert "truncated" in system_message
+    assert len(system_message) < len(huge_context)
+
+
 @pytest.mark.asyncio
 async def test_stream_groq_response_injects_course_context_and_uses_configured_model(monkeypatch):
     captured = {}
@@ -227,3 +294,170 @@ async def test_stream_groq_response_raises_on_non_200(monkeypatch):
         ):
             pass
     assert exc_info.value.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Dual-source answer verification (see services/answer_verification.py) -
+# the isolated single-source draft call and the final verify/merge call.
+# ---------------------------------------------------------------------------
+
+def test_draft_model_is_configured_and_distinct_from_the_main_model():
+    # Regression guard: the whole point of DRAFT_MODEL is to be a cheaper/
+    # faster sibling used only for the two intermediate drafts - if it's
+    # ever silently set equal to GROQ_MODEL (or emptied), the pipeline still
+    # "works" but the cost-saving the model choice was for silently vanishes.
+    assert ai_chat.DRAFT_MODEL
+    assert ai_chat.DRAFT_MODEL != ai_chat.GROQ_MODEL
+
+
+def test_answer_max_tokens_is_deliberately_bounded():
+    # Regression guard for a real production incident: Groq charges a
+    # request's *reserved* max_tokens against its per-minute token budget
+    # regardless of actual output length, so raising this back toward the
+    # old 4096 risks reintroducing the 413 rate-limit crash this value was
+    # lowered to fix (see this constant's own docstring in ai/chat.py).
+    # Bounded on both sides: also flags an accidental further cut that would
+    # make ordinary long answers truncate even more aggressively than the
+    # already-accepted tradeoff.
+    assert 1000 <= ai_chat._ANSWER_MAX_TOKENS <= 2500
+    assert ai_chat._ANSWER_MAX_TOKENS == 1800
+
+
+def test_verify_system_prompt_composes_rather_than_rewrites_system_prompt():
+    # Must contain SYSTEM_PROMPT verbatim, not a hand-copied second version -
+    # otherwise the two drift out of sync the next time SYSTEM_PROMPT changes.
+    assert ai_chat.SYSTEM_PROMPT in ai_chat.VERIFY_SYSTEM_PROMPT
+    assert "NEVER invent" in ai_chat.VERIFY_SYSTEM_PROMPT
+
+
+def test_verify_system_prompt_instructs_dropping_unsupported_claims():
+    prompt = ai_chat.VERIFY_SYSTEM_PROMPT.lower()
+    assert "neither context block" in prompt or "unsupported is unsupported" in prompt
+
+
+def test_isolated_draft_prompt_forbids_outside_knowledge():
+    prompt = ai_chat._isolated_draft_system_prompt("this course's materials").lower()
+    assert "only" in prompt
+    assert "outside knowledge" in prompt or "training knowledge" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_isolated_draft_uses_draft_model_and_only_given_context(monkeypatch):
+    captured = {}
+
+    async def fake_post(self, url, headers=None, json=None):
+        captured["json"] = json
+        return _FakeResponse(200, _groq_completion_payload("Draft answer"))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    async with httpx.AsyncClient() as client:
+        result = await ai_chat.generate_isolated_draft(
+            client,
+            [Message(role="user", content="what is a hash table?")],
+            context_block="SEARCH-CONTEXT-MARKER",
+            source_label="web search results",
+            subject="DSA",
+        )
+
+    assert result == "Draft answer"
+    assert captured["json"]["model"] == ai_chat.DRAFT_MODEL
+    system_message = captured["json"]["messages"][0]["content"]
+    assert "SEARCH-CONTEXT-MARKER" in system_message
+    assert "web search results" in system_message
+    assert "DSA" in system_message
+
+
+@pytest.mark.asyncio
+async def test_generate_isolated_draft_raises_on_groq_error(monkeypatch):
+    async def fake_post(self, url, headers=None, json=None):
+        return _FakeResponse(429, text="rate limited")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(HTTPException) as exc_info:
+            await ai_chat.generate_isolated_draft(
+                client, [Message(role="user", content="hi")], "ctx", "web search results", None
+            )
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_generate_comparison_notes_uses_draft_model_and_includes_both_drafts(monkeypatch):
+    captured = {}
+
+    async def fake_post(self, url, headers=None, json=None):
+        captured["json"] = json
+        return _FakeResponse(200, _groq_completion_payload("- They agree on X\n- They conflict on Y"))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    async with httpx.AsyncClient() as client:
+        result = await ai_chat.generate_comparison_notes(
+            client,
+            search_draft="SEARCH-DRAFT-MARKER",
+            course_draft="COURSE-DRAFT-MARKER",
+            subject="DSA",
+        )
+
+    assert result == "- They agree on X\n- They conflict on Y"
+    assert captured["json"]["model"] == ai_chat.DRAFT_MODEL
+    prompt = captured["json"]["messages"][0]["content"]
+    assert "SEARCH-DRAFT-MARKER" in prompt
+    assert "COURSE-DRAFT-MARKER" in prompt
+    assert "DSA" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_comparison_notes_raises_on_groq_error(monkeypatch):
+    async def fake_post(self, url, headers=None, json=None):
+        return _FakeResponse(429, text="rate limited")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(HTTPException) as exc_info:
+            await ai_chat.generate_comparison_notes(client, "sd", "cd", None)
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_stream_verify_response_includes_both_drafts_and_both_contexts(monkeypatch):
+    captured = {}
+    sse_lines = [
+        "data: " + json.dumps({"choices": [{"delta": {"content": "Final "}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": "answer"}}]}),
+        "data: [DONE]",
+    ]
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        captured["json"] = json
+        return _FakeStreamCM(_FakeResponse(200, lines=sse_lines))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    async with httpx.AsyncClient() as client:
+        chunks = []
+        async for chunk in ai_chat.stream_verify_response(
+            client,
+            [Message(role="user", content="what is a hash table?")],
+            subject="DSA",
+            search_draft="SEARCH-DRAFT-MARKER",
+            course_draft="COURSE-DRAFT-MARKER",
+            search_context="SEARCH-CTX-MARKER",
+            course_context="COURSE-CTX-MARKER",
+        ):
+            chunks.append(chunk)
+
+    assert "".join(chunks) == "Final answer"
+    assert captured["json"]["model"] == ai_chat.GROQ_MODEL
+    system_message = captured["json"]["messages"][0]["content"]
+    for marker in (
+        "SEARCH-DRAFT-MARKER",
+        "COURSE-DRAFT-MARKER",
+        "SEARCH-CTX-MARKER",
+        "COURSE-CTX-MARKER",
+        "what is a hash table?",
+    ):
+        assert marker in system_message

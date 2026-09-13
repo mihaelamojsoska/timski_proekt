@@ -13,3 +13,4 @@ lesson_seed_report_*.md
 # Marketplace study-guide text-extraction cache (same reasoning - local
 # scratch, not shared/versioned; see backend/services/material_study_guide.py)
 backend/services/material_study_guide_cache/
+finki_announcements_log.txt

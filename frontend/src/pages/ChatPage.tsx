@@ -51,6 +51,7 @@ export function ChatPage() {
   const [activeId, setActiveId] = useState<number | null>(routeId);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [sources, setSources] = useState<ChatSource[]>([]);
+  const [sourcesFromCache, setSourcesFromCache] = useState(false);
   const [subject, setSubject] = useState('Any subject');
   const [live, setLive] = useState(true);
   const [courses, setCourses] = useState<CourseOut[]>([]);
@@ -107,6 +108,7 @@ export function ChatPage() {
     }
     setActiveId(routeId);
     setSources([]);
+    setSourcesFromCache(false);
     if (routeId == null) {
       setMessages([]);
       setMembers([]);
@@ -205,7 +207,14 @@ export function ChatPage() {
 
       const userMsg: DisplayMessage = { id: uid(), role: 'user', content };
       const aiMsgId = uid();
-      const aiMsg: DisplayMessage = { id: aiMsgId, role: 'ai', content: '', streaming: true };
+      const aiMsg: DisplayMessage = { id: aiMsgId, role: 'ai', content: '', streaming: true, thinkingStartedAt: Date.now() };
+
+      // Marks when the first real answer content arrives, so "Thought for
+      // Xs" can measure just the drafting/verification phase - not the
+      // entire request including however long the final (already-decided)
+      // answer itself takes to stream in. Plain per-send local state (not
+      // component state): closed over by this call's callbacks only.
+      let thinkingEndedAt: number | null = null;
 
       const priorMessages = messages;
       setMessages((prev) => [...prev, userMsg, aiMsg]);
@@ -240,6 +249,15 @@ export function ChatPage() {
             }
           },
           onSources: (srcs) => setSources(srcs),
+          onSearchMeta: (meta) => setSourcesFromCache(meta.fromCache),
+          onReasoning: (data) => {
+            setMessages((prev) => prev.map((m) => (m.id === aiMsgId ? { ...m, reasoning: data } : m)));
+          },
+          onThinking: (status) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === aiMsgId ? { ...m, thinkingSteps: [...(m.thinkingSteps || []), status] } : m)),
+            );
+          },
           onSessionExpired: () => {
             setMessages((prev) =>
               prev.map((m) =>
@@ -255,10 +273,22 @@ export function ChatPage() {
             );
           },
           onDone: () => {
-            setMessages((prev) => prev.map((m) => (m.id === aiMsgId ? { ...m, streaming: false } : m)));
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== aiMsgId) return m;
+                const thinkingDurationMs =
+                  m.thinkingSteps && m.thinkingSteps.length > 0 && m.thinkingStartedAt
+                    ? (thinkingEndedAt ?? Date.now()) - m.thinkingStartedAt
+                    : undefined;
+                return { ...m, streaming: false, thinkingDurationMs };
+              }),
+            );
           },
         },
         (fullText) => {
+          if (thinkingEndedAt === null && fullText.length > 0) {
+            thinkingEndedAt = Date.now();
+          }
           setMessages((prev) => prev.map((m) => (m.id === aiMsgId ? { ...m, content: fullText } : m)));
         },
       )
@@ -377,6 +407,7 @@ export function ChatPage() {
       rightSidebar={
         <SourcesSidebar
           sources={sources}
+          sourcesFromCache={sourcesFromCache}
           onQuiz={() => runTool('quiz')}
           onSummary={() => runTool('summary')}
           onAskMore={() => runTool('askMore')}

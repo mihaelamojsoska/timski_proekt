@@ -76,7 +76,8 @@ export function MyCoursesPage() {
             </div>
           )}
 
-          {(courses || []).map((c) => (
+          <div className="card-stack">
+            {(courses || []).map((c) => (
             <div
               key={c.id}
               className="sugg"
@@ -115,7 +116,8 @@ export function MyCoursesPage() {
                 </button>
               </div>
             </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </AppShell>

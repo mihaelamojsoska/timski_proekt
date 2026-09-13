@@ -32,7 +32,17 @@ export function MessageList({ messages, onPickSuggestion }: Props) {
               return <MessageBubbleUser key={m.id} content={m.content} index={i} authorName={m.authorName} />;
             }
             if (m.role === 'error') return <MessageBubbleError key={m.id} content={m.content} />;
-            return <MessageBubbleAI key={m.id} content={m.content} streaming={m.streaming} error={m.error} />;
+            return (
+              <MessageBubbleAI
+                key={m.id}
+                content={m.content}
+                streaming={m.streaming}
+                error={m.error}
+                reasoning={m.reasoning}
+                thinkingSteps={m.thinkingSteps}
+                thinkingDurationMs={m.thinkingDurationMs}
+              />
+            );
           })}
         </div>
       )}

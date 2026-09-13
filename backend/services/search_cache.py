@@ -14,6 +14,11 @@ from backend.web_search.search import build_search_query, web_search
 # Tune empirically once real usage data comes in.
 SIMILARITY_THRESHOLD = 0.35
 
+# Looser threshold used only by find_related_cached_search() below - deliberately
+# below SIMILARITY_THRESHOLD, since anything at or above that would already have
+# been picked up as this turn's primary search result by get_or_search() itself.
+RELATED_SIMILARITY_THRESHOLD = 0.15
+
 # Study-content search results don't go stale on a clock the way news does, but we
 # still refresh occasionally in case docs have moved/changed.
 STALE_AFTER = timedelta(days=90)
@@ -96,6 +101,50 @@ async def get_or_search(
     if results:
         _create(db, question, subject, query, results)
     return results, False
+
+
+def find_related_cached_search(
+    db: Session, question: str, subject: Optional[str]
+) -> Optional[Tuple[str, List[SearchResult]]]:
+    """Cheap, DB-only lookup (no live search call) for a previously cached
+    search loosely related to this question - only meant to be called after
+    get_or_search() already went live for THIS question (i.e. nothing at or
+    above SIMILARITY_THRESHOLD matched, or that entry would already be this
+    turn's primary search result). Used to offer an optional third "cached
+    web search" source to cross-check against in the answer-verification
+    pipeline (see services/answer_verification.py) - purely additive, never
+    replaces the primary get_or_search() result, and costs nothing but a
+    trigram similarity query since it never calls the live search API.
+
+    Deliberately bounded ABOVE by SIMILARITY_THRESHOLD (not just below by
+    RELATED_SIMILARITY_THRESHOLD): a live-search cache miss for this exact
+    question makes get_or_search() persist a brand new row for it right
+    before this function runs, and that new row is a perfect (similarity 1.0)
+    self-match - without the upper bound this always "finds" the question
+    itself as its own related source. The upper bound also just enforces
+    what "related but not a near-duplicate" should mean in the first place.
+
+    Returns (original_question, results) so the caller can label the card
+    with what question it was originally cached for, or None when nothing
+    clears even this looser bar. The label is the entry's normalized_query
+    (lowercased, punctuation stripped) rather than raw_query - raw_query is
+    the search-engine query actually sent to Tavily (subject + "documentation
+    tutorial" appended, see web_search.py::build_search_query), not a
+    question a student would recognize; the schema doesn't separately store
+    the original verbatim question text."""
+    normalized = normalize_query(question)
+    if not normalized:
+        return None
+
+    similarity = func.similarity(CachedSearch.normalized_query, normalized)
+    q = db.query(CachedSearch).filter(
+        similarity >= RELATED_SIMILARITY_THRESHOLD, similarity < SIMILARITY_THRESHOLD
+    )
+    q = q.filter(CachedSearch.subject == subject) if subject else q.filter(CachedSearch.subject.is_(None))
+    entry = q.order_by(similarity.desc()).first()
+    if not entry:
+        return None
+    return entry.normalized_query, _to_search_results(entry.results)
 
 
 async def get_or_search_many(

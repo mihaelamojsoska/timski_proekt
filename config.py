@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     SUPABASE_STORAGE_BUCKET: str = "course-materials"
 
+    # Kill switch for the dual-source answer-verification pipeline (see
+    # services/answer_verification.py) - it triples the LLM calls made for a
+    # chat question when both live search and course context are available
+    # (two isolated drafts + one verify/merge call), so this can turn it off
+    # instantly without a deploy if cost/latency doesn't pan out in practice.
+    # Set to "false" to disable; anything else (including unset) means enabled.
+    ENABLE_ANSWER_VERIFICATION: str = "true"
+
     # extra="ignore": don't crash on stray/leftover .env keys (e.g. from a
     # since-removed integration) - just ignore anything we don't declare above.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -47,6 +55,7 @@ DATABASE_URL = settings.DATABASE_URL
 JWT_SECRET_KEY = settings.JWT_SECRET_KEY
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 RESEND_API_KEY = settings.RESEND_API_KEY
+ENABLE_ANSWER_VERIFICATION = settings.ENABLE_ANSWER_VERIFICATION.strip().lower() != "false"
 EMAIL_FROM = settings.EMAIL_FROM
 STRIPE_SECRET_KEY = settings.STRIPE_SECRET_KEY
 STRIPE_WEBHOOK_SECRET = settings.STRIPE_WEBHOOK_SECRET

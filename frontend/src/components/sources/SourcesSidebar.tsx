@@ -19,6 +19,10 @@ function siteFromUrl(url: string): string {
 
 interface Props {
   sources: ChatSource[];
+  /** True when these sources were served from the search cache (see
+   * backend/services/search_cache.py) instead of a fresh live web search -
+   * shown as a small pill so it's clear why the answer came back quickly. */
+  sourcesFromCache: boolean;
   onQuiz: () => void;
   onSummary: () => void;
   onAskMore: () => void;
@@ -35,6 +39,7 @@ interface Props {
 
 export function SourcesSidebar({
   sources,
+  sourcesFromCache,
   onQuiz,
   onSummary,
   onAskMore,
@@ -62,6 +67,15 @@ export function SourcesSidebar({
           <h3 className="sec-title">Cited sources</h3>
           <span className="sec-sub">{sources.length} references</span>
         </div>
+        {sources.length > 0 && sourcesFromCache && (
+          <div className="src-cache-pill" title="Served from a previously cached search instead of a fresh live lookup">
+            <svg className="ic-sm" viewBox="0 0 24 24" style={{ width: 11, height: 11 }}>
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 6v6l4 2" />
+            </svg>
+            <span>From cached search</span>
+          </div>
+        )}
         {sources.length === 0 ? (
           <div className="empty">
             When you ask a question, live documentation citations will appear here, numbered as footnotes alongside

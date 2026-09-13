@@ -46,6 +46,9 @@ cp .env.example .env
 **GEMINI_API_KEY** (optional — only needed for the lesson-generation pipeline, see "Lesson Content" below)
 → Get from https://aistudio.google.com/apikey
 
+**ENABLE_ANSWER_VERIFICATION** (optional, defaults `true`)
+→ Kill switch for the dual-source answer-verification pipeline (see "Answer Verification" below) — set to `false` to instantly disable it (no deploy needed) if its extra Groq calls cause cost/latency/rate-limit problems. Reuses the same `GROQ_API_KEY`, no separate key needed.
+
 **DATABASE_URL** (required)
 → You need a local PostgreSQL server. Create a database (e.g. `learnwise`), then set:
 ```
@@ -184,7 +187,8 @@ If you hit `ModuleNotFoundError: No module named 'backend'`: that means `backend
     ├── main.py                  # FastAPI entry point - registers all routes, CORS config
     │
     ├── ai/                      # AI integration layer
-    │   └── chat.py              # Groq API calls, streaming, quiz/summary/explore/followups generation
+    │   └── chat.py              # Groq API calls, streaming, quiz/summary/explore/followups generation,
+    │                            #   isolated single-source drafts + verify/merge call (see "Answer Verification")
     │
     ├── database/                # Data storage layer
     │   ├── session.py           # SQLAlchemy engine, SessionLocal, get_db dependency
@@ -230,7 +234,9 @@ If you hit `ModuleNotFoundError: No module named 'backend'`: that means `backend
     │       └── __init__.py
     │
     ├── services/                # Business logic layer
-    │   ├── search_cache.py      # Cache lookup/write in front of Tavily (exact + pg_trgm fuzzy match)
+    │   ├── search_cache.py      # Cache lookup/write in front of Tavily (exact + pg_trgm fuzzy match),
+    │   │                        #   plus a looser related-search lookup for answer_verification.py
+    │   ├── answer_verification.py # Dual-source (+ optional third) draft/verify orchestration - see "Answer Verification"
     │   ├── chat_service.py      # Conversation resolve/save helpers used by chatRoute.py
     │   ├── chat_state.py        # In-memory, self-expiring "is a reply generating for this conversation" flag (group chat)
     │   ├── course_context.py    # Formats a Course into a context block for the AI prompt
@@ -273,7 +279,8 @@ If you hit `ModuleNotFoundError: No module named 'backend'`: that means `backend
     │
     └── tests/                   # Unit & integration tests
         ├── conftest.py            # Shared helpers (register_and_login, cleanup_test_data) + disables the register rate limit for tests marked @pytest.mark.bulk_register
-        ├── test_search_cache.py   # Cache normalize/match/hit tests (needs a real Postgres w/ pg_trgm)
+        ├── test_search_cache.py   # Cache normalize/match/hit tests + find_related_cached_search bounds (needs a real Postgres w/ pg_trgm)
+        ├── test_answer_verification.py # should_verify gating/size-gate, the fallback matrix, third-source draft handling (Groq calls mocked)
         ├── test_course_context.py # format_course_context() + _get_course_context() coverage
         ├── test_ai_chat.py        # Prompt construction, course_context threading, model/prompt regression guards
         ├── test_chat_route.py     # SSE mid-stream failure handling (event: error frame + partial-reply save), group-chat prompt-rebuild-from-DB, member can chat
@@ -332,14 +339,37 @@ If you hit `ModuleNotFoundError: No module named 'backend'`: that means `backend
 ## Key Components
 
 ### AI Layer (ai/chat.py)
-- Handles all Groq API interactions (`llama-3.3-70b-versatile`, called directly via `httpx`, no SDK)
+- Handles all Groq API interactions, called directly via `httpx`, no SDK. `GROQ_MODEL = "openai/gpt-oss-120b"` is the main model (`llama-3.3-70b-versatile` was retired from Groq's catalog and this is its closest replacement, confirmed 2026-08-20); `DRAFT_MODEL = "openai/gpt-oss-20b"` is a smaller/cheaper model in the same family, used only for the internal draft/comparison calls in the answer-verification pipeline below
 - Manages system prompts and context injection (search results are injected as extra context before the model answers)
 - Streams responses back to the client via Server-Sent Events
 - Also powers `/api/quiz`, `/api/summary`, `/api/explore`, `/api/ask-more` — these do **not** call Groq's streaming path, they return a single JSON response each
+- `_ANSWER_MAX_TOKENS = 1800` caps every student-facing streamed answer (both the plain path and the verification pipeline's merge step). This isn't just an output-length cap: Groq's per-minute token budget (TPM) is charged against the *reserved* `max_tokens` the instant a request is made, not against what the model actually ends up generating — so a generous `max_tokens` eats most of a tight TPM budget before a single prompt token is even counted, and was a direct cause of the rate-limit crash described below
 
 ### Web Search (web_search/search.py) + Search Cache (services/search_cache.py)
 - `web_search/search.py` integrates with the Tavily Search API, builds queries, and formats results for AI context
 - `services/search_cache.py` sits in front of it: `/api/chat` and `/api/explore` now call `get_or_search()`/`get_or_search_many()` instead of hitting Tavily directly. A question is matched against the `cached_searches` table first — exact normalized match, then a Postgres `pg_trgm` fuzzy-similarity fallback for near-duplicate phrasing (scoped per `subject`) — and only falls through to a live Tavily call on a genuine cache miss. Cache entries soft-refresh after 90 days rather than expiring outright, since study-content answers don't go stale on a clock
+- `find_related_cached_search()` is a second, looser lookup used only by the answer-verification pipeline below: given this turn's own search already went live (no exact/near-duplicate hit), it cheaply checks (one extra `pg_trgm` query, **no live API call**) whether some *other*, genuinely different past question is still loosely related, to offer as a third source to cross-check against. Bounded both below (`RELATED_SIMILARITY_THRESHOLD = 0.15`, otherwise it surfaces noise) and above (`SIMILARITY_THRESHOLD = 0.35`, otherwise it can "find" the row `get_or_search()` itself just inserted for this exact question a moment earlier — a real bug caught during live testing)
+
+### Answer Verification (services/answer_verification.py + ai/chat.py)
+**Why this exists**: before this, `/api/chat` just concatenated live search results and course materials into one string and sent it to Groq in a single call — nothing caught it if the model blended details across the two sources, or embellished beyond what either one actually said. This module cross-checks instead.
+
+**How it works, when both a live search *and* real course content are available for a question** (`answer_verification.should_verify()` gates on exactly that, plus a size check below):
+1. Two isolated draft answers are generated **concurrently** (`asyncio.gather`), each using the cheaper `DRAFT_MODEL` and seeing **only one** raw context block — one draft sees only the search results, the other only the course materials — with an explicit instruction to say plainly what its one source does and doesn't cover, never filling a gap from outside/general knowledge. These drafts are internal artifacts, never shown to the student raw.
+2. If a third, loosely-related cached search happens to be cheaply available (see `find_related_cached_search()` above) **and** adding it still fits the token budget (`_cached_source_fits_budget` — its context was never counted by the initial gate below, since it's only looked up *after* that gate passes), a **third** isolated draft is generated from it too. This Groq call is deliberately deferred until *after* the two always-present drafts are confirmed to have succeeded (run alongside the comparison note instead), specifically so a primary-draft failure never pays for a third-source call it's about to throw away in the fallback branches below — purely additive either way: if it fails, or didn't fit the budget, it's just omitted, never triggers a fallback.
+3. A short comparison note is generated (`generate_comparison_notes`) explaining how the search and course drafts relate — what each uniquely covers, where they agree, where they conflict, and which to trust more. Also non-fatal if it fails.
+4. A final **verify/merge** call (the stronger `GROQ_MODEL`) sees *all* the drafts **and** the raw context blocks they were built from — not just the drafts' own wording — and produces the one answer the student actually sees, keeping only claims a raw context block actually supports, dropping anything no source backs (even if it "sounds reasonable"), and calling out conflicts between sources explicitly instead of silently picking one. This is the actual hallucination guard: checking a claim against its real source, not just against another draft's paraphrase of it.
+5. **Fallback matrix** (`build_verified_answer`): both main drafts fail → falls back to today's plain joined-context single call (the pre-feature path, so it needs no new testing); only one fails → falls back to a single-source call scoped to whichever draft succeeded; both succeed but the verify call fails before its first chunk → still falls back to the joined-context call, but the reasoning panel is still shown (the drafts were real); verify fails **after** streaming has started → propagates to `chatRoute.py`'s existing SSE error handling, since there's no way to retroactively un-stream partial text.
+6. The frontend shows all of this as a persisted, click-to-expand **"Thought for Xs"** panel on the message (`MessageBubbleAI.tsx`) — status updates stream live via `event: thinking` SSE frames while it's working, then the trace stays there afterward instead of vanishing the moment the answer starts. Expanding it shows the comparison note and each source's card (Web search / Course materials / Cached search when present).
+7. Separately, the model is instructed (`SYSTEM_PROMPT` rule 11) to title any in-answer "what do the sources say" comparison exactly `## Source comparison` and put it last — the frontend regex-splits that heading out of the raw answer text and renders it as its own collapsed-by-default block at the bottom of the message, instead of it just being another heading in the middle of the answer. (Deliberately not named "recap"/"summary" — that already means the separate Study recap/Summary tool elsewhere in the app.)
+
+**Cost/safety controls** (all in `services/answer_verification.py` unless noted):
+- `ENABLE_ANSWER_VERIFICATION` (`config.py`, defaults `"true"`) — a kill switch. This pipeline can make up to 5 Groq calls for one question instead of 1, so being able to turn it off instantly (no deploy) matters if cost/latency doesn't pan out.
+- A size gate (`_MAX_COMBINED_CONTEXT_CHARS_FOR_VERIFICATION`, a rough chars-per-token estimate — no real tokenizer is used) skips the whole pipeline and falls back to the plain single-call path when the combined context + conversation history is already large. This exists because of a **real production crash**: a course with 100+ ingested recordings, combined with a long conversation, made this pipeline's stacked Groq calls blow straight through the account's Groq tier's 8,000-tokens-per-minute limit — failing *every* call in the pipeline, including the safety-net fallback, since it reused the same oversized context. Below this gate, behavior is unaffected either way. Sized with the verify call's *actual* worst-case cost in mind (its own reserved `max_tokens`, system-prompt overhead, and up to 3 full drafts re-embedded on top of the gated context/history — not just the gated amount alone), not merely "some number under 8000."
+- Draft calls send only the latest user message, not the full conversation history — they don't need conversational continuity (never shown to the student), and sending full history to 2-3 draft calls was needlessly duplicating it on top of what the verify call (which does need it) already sends.
+- `_ANSWER_MAX_TOKENS` (see AI Layer above) — the actual root cause fix: Groq counts a request's *reserved* `max_tokens` against its per-minute budget regardless of real output length, so this was lowered from 4096 across the board.
+- **The plain single-call path (`stream_groq_response`) has its own independent size safety net too** (`ai/chat.py::_fit_to_token_budget`, a separate, more generous budget since this call carries none of the pipeline's extra overhead) — it isn't just protected indirectly through the verification gate above. This closes what was originally a real gap: every fallback destination in this pipeline (the plain default path, *and* the verify-failure fallback) ultimately calls this same function, so it's now never itself unprotected regardless of which caller reached it. Trims context first (truncated, not dropped), then the oldest conversation turns if that alone isn't enough — always keeping at least the latest message.
+
+**Not shown as a source, but visible elsewhere**: whether *this turn's own* search came from the cache at all (as opposed to the third, cross-check-only cached source above) is a separate, simpler signal — see `event: searchMeta` in the API Endpoints section below and the "From cached search" pill in the sources sidebar.
 
 ### Routes (routes/)
 - `chatRoute.py`: `/api/chat`, `/api/quiz`, `/api/summary`, `/api/explore`, `/api/ask-more` — **all require auth**
@@ -465,6 +495,7 @@ The Marketplace equivalent of Lesson Content above, but generated on demand from
 | Explore Feature | Complete (auth required, cache-backed, optional `course_id` context) |
 | Database Layer | Complete (PostgreSQL + SQLAlchemy + Alembic) |
 | Search-Result Caching | Complete (`cached_searches` table, exact + pg_trgm fuzzy match) |
+| Dual-source answer verification | Complete — cross-checks a live-search draft against a course-materials draft (+ an optional third, cheaply-found cached-search draft) before merging into one answer; gated on both sources being genuinely available, with a size-based fallback for oversized requests. Kill switch: `ENABLE_ANSWER_VERIFICATION` (see "Answer Verification" above) |
 | Middleware | Complete (JWT auth guard on all endpoints, CORS origin allowlist, rate limiting on auth routes) |
 | Tests | Backend: covers search cache, course context, AI prompt construction, SSE error handling, Marketplace/admin/billing/uploads (Stripe and Supabase calls mocked), lesson-content generation, quiz progress, and FINKI announcement sync (see "Run the tests" and the tests/ tree above). Frontend: none yet — no test framework configured |
 | Course data / study content | Complete for 67 ingested courses (see "Course Data" above) — metadata + lecture topics + materials, no real syllabus text available from any public source |
@@ -522,7 +553,15 @@ Real-time sync is deliberately polling-based, not push/WebSocket - see `frontend
 
 ### Chat & study tools (`/api/chat`, `/api/quiz`, `/api/summary`, `/api/explore`, `/api/ask-more`) - all require auth
 All five accept an optional `course_id?: number` — if given and it matches a row in `courses`, that course's metadata + lecture topics are folded into the prompt context (see "Course Data" above for what this context actually contains).
-- `POST /api/chat` - `{messages, subject?, search?, conversation_id?, course_id?}` — omit `conversation_id` to start a new conversation, or pass an existing one to keep appending to it. Returns a `text/event-stream`: an `event: conversation` message with `{id, title, issue_no}` first (so the frontend knows which conversation was created/used, and its permanent "No." — see "Permanent conversation numbering" above), then an `event: sources` message with the search results if any, then a stream of `data: <chunk>` events, ending with `data: [DONE]`. Search results are served from `cached_searches` when a similar question was already searched, otherwise fetched live from Tavily and cached for next time.
+- `POST /api/chat` - `{messages, subject?, search?, conversation_id?, course_id?}` — omit `conversation_id` to start a new conversation, or pass an existing one to keep appending to it. Returns a `text/event-stream`, in this order when present:
+  - `event: conversation` - `{id, title, issue_no}`, always first (so the frontend knows which conversation was created/used, and its permanent "No." — see "Permanent conversation numbering" above)
+  - `event: sources` - the search results, if `search` was on and any came back
+  - `event: searchMeta` - `{fromCache: bool}`, alongside `sources` - whether *this turn's own* search was served from `cached_searches` or fetched live from Tavily (shown as a small "From cached search" pill in the sources sidebar). Independent of the third-source cross-check described below.
+  - `event: thinking` - `{status}`, zero or more live status updates while the answer-verification pipeline (see "Answer Verification" above) is working - only emitted when that pipeline actually runs
+  - `event: reasoning` - the dual/triple-source drafts + comparison note, only when the verification pipeline ran and its drafts succeeded (see "Answer Verification" above) - powers the "Thought for Xs" panel
+  - a stream of `data: <chunk>` events - the actual answer text
+  - `event: error` - `{message}`, only on a mid-stream failure (partial text already sent is preserved, not replaced)
+  - `data: [DONE]` - always last
 - `POST /api/quiz` - `{messages, subject?, course_id?}` → a generated quiz
 - `POST /api/summary` - `{messages, subject?, course_id?}` → a study summary
 - `POST /api/explore` - `{messages, subject?, course_id?}` → related links (cache-backed, same as `/api/chat`)
@@ -579,11 +618,11 @@ Community-contributed study notes - deliberately separate from Materials above: 
 ## How It Works
 
 1. User sends a question
-2. Backend builds a search query from the question + selected subject
-3. Tavily Search API returns 5 relevant results (titles, URLs, snippets)
-4. Those results are injected into Groq's system prompt as context
-5. Groq streams a tutor-style answer grounded in the live docs
-6. Sources appear in the sidebar so the user can verify
+2. Backend builds a search query from the question + selected subject, served from `cached_searches` on a repeat/near-duplicate or fetched live from Tavily otherwise (see "Search Cache" above)
+3. If a course is selected, that course's metadata/topics/materials are folded in too (see "Course Data" above)
+4. **If both a live search and real course content are available**, the answer-verification pipeline cross-checks them instead of just concatenating the two into one prompt — see "Answer Verification" above for the full flow (isolated drafts → comparison note → verify/merge). Otherwise, the single context block goes straight to Groq as before
+5. Groq streams a tutor-style answer grounded in the available context(s)
+6. Sources appear in the sidebar so the user can verify; a "Thought for Xs" panel on the message shows the verification pipeline's reasoning when it ran
 
 ## Roadmap
 
@@ -593,6 +632,7 @@ The team has agreed on the following next steps, roughly in priority order. See 
 2. **React frontend** ✅ done — `backend/static/learnwise-2.html` has been replaced by a real Vite + TypeScript SPA in `frontend/`, against the exact same REST API. FastAPI is now a pure JSON API (`backend/main.py` no longer serves the old static HTML); the old files are left on disk for reference but are unreferenced. See "Frontend" above. `/courses`, `/courses/:courseId`, `/progress`, and `/admin` are all real pages now — no stubs left.
 3. **Course/study data** ✅ done, 67 courses ingested — `Course`/`CourseMaterial`/`Recording` tables exist, `/api/courses/*` endpoints are live, the AI tutor accepts an optional `course_id` on chat/quiz/summary/explore/ask-more and folds in course metadata + topics + materials, and the frontend has a real Courses catalog + detail page (`/courses`, `/courses/:courseId`) *plus* a course picker right in the chat masthead so `course_id` actually gets used day-to-day, not just via the API. See "Course Data" above for the **important caveat**: no real syllabus text exists in any public source, so this is metadata + lecture topics + materials, not a full curriculum — and for the anti-hallucination fix that keeps the tutor from inventing resources that aren't actually in that data.
 4. **Quiz generation from lecture recordings** (idea, not yet started) — `snimki.finki-hub.com` only lists links to recordings (almost certainly YouTube), with no transcripts, and the lectures are in Macedonian with a lot of Macedonian/English code-switching around technical terms. Plan: try YouTube's own (even auto-generated) captions first via `youtube-transcript-api`; if quality is too poor on real sample lectures, fall back to self-hosted Whisper transcription; cache whatever transcript is produced permanently, the same way search results get cached in step 1. This needs a short manual quality spike on a couple of real lectures before any pipeline gets built — Macedonian ASR quality on code-heavy lectures is the real risk here, not the engineering.
+5. **Dual-source answer verification** ✅ done — prompted by a professor's suggestion to reduce hallucination by cross-checking live search against course materials, rather than concatenating both into one call as before. Isolated single-source drafts, a comparison note, and a verify/merge call now catch claims neither source actually supports; gated to only run when both sources are genuinely available, with a size-based fallback (and a kill switch, `ENABLE_ANSWER_VERIFICATION`) after a real production Groq rate-limit crash surfaced how expensive stacking several extra calls onto an already-large course/conversation context could get. See "Answer Verification" above for the full design — including the plain single-call path's own independent size safety net, added after a code review flagged that it was otherwise the one path every fallback in this pipeline ultimately depends on, unprotected.
 
 ## Extending It
 
