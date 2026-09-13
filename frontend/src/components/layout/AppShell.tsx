@@ -3,26 +3,6 @@ import type { ReactElement, ReactNode } from 'react';
 import { useCollapsed } from '../../hooks/useCollapsed';
 import { ChevronIcon } from '../icons';
 
-/** Plain hamburger/close icon, inline rather than in icons.tsx since it's
- * only ever used here for the mobile nav toggle. */
-function MenuIcon({ open }: { open: boolean }) {
-  if (open) {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <line x1="6" y1="6" x2="18" y2="18" />
-        <line x1="18" y1="6" x2="6" y2="18" />
-      </svg>
-    );
-  }
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="3" y1="6" x2="21" y2="6" />
-      <line x1="3" y1="12" x2="21" y2="12" />
-      <line x1="3" y1="18" x2="21" y2="18" />
-    </svg>
-  );
-}
-
 interface AppShellProps {
   sidebar: ReactNode;
   children: ReactNode;
@@ -63,7 +43,7 @@ export function AppShell({
         aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
         title={mobileOpen ? 'Close menu' : 'Open menu'}
       >
-        <MenuIcon open={mobileOpen} />
+        <ChevronIcon flip={mobileOpen} />
       </button>
       {mobileOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileOpen(false)} />}
       <aside className={`sidebar-left${leftCollapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
