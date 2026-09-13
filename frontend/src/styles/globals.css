@@ -2560,6 +2560,13 @@ textarea:focus-visible {
     width: 80vw;
     max-width: 300px;
   }
+  .sidebar-left.mobile-open .sidebar-collapse-btn {
+    left: 8px;
+    right: auto;
+  }
+  .sidebar-left.mobile-open .brand {
+    padding-left: 44px;
+  }
   .masthead {
     padding: 12px 64px 12px 20px;
   }
